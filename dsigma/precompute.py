@@ -9,6 +9,7 @@ import warnings
 
 from astropy import units as u
 from astropy.cosmology import FlatLambdaCDM
+import astropy.cosmology.units as cu
 from astropy.units import UnitConversionError
 from astropy_healpix import HEALPix
 from scipy.interpolate import interp1d
@@ -204,13 +205,11 @@ def precompute(
         Source redshift distributions. If provided, this will be used to
         compute mean source redshifts and critical surface densities. These
         mean quantities would be used instead the individual photometric
-        redshift estimates. The table needs to have a `z` column giving the
-        redshift and a `n` column with the :math:`n(z)` for all samples.
-        Default is None.
+        redshift estimates. Default is None.
     cosmology : astropy.cosmology, optional
         Cosmology to assume for calculations. Default is a flat LambdaCDM
         cosmology with h=1 and Om0=0.3.
-    comoving : bool, optional
+    comoving : boolean, optional
         Whether to use comoving or physical quantities for radial bins (if
         given in physical units) and the excess surface density. Default is
         True.
@@ -230,7 +229,7 @@ def precompute(
         It has to be a power of 2. May impact performance. Default is 256.
     n_jobs : int, optional
         Number of jobs to run at the same time. Default is 1.
-    progress_bar : bool, option
+    progress_bar : boolean, option
         Whether to show a progress bar for the main loop over lens pixels.
         Default is False.
 
@@ -263,8 +262,8 @@ def precompute(
         if 'z_bin' not in table_s.colnames:
             raise ValueError('To use source redshift distributions, the ' +
                              'source table needs to have a `z_bin` column.')
-        if (not np.issubdtype(table_s['z_bin'].data.dtype, np.integer) or
-                np.any(table_s['z_bin'] < 0)):
+        if not np.issubdtype(table_s['z_bin'].data.dtype, int) or np.amin(
+                table_s['z_bin']) < 0:
             raise ValueError('The `z_bin` column in the source table must ' +
                              'contain only non-negative integers.')
         if np.amax(table_s['z_bin']) > table_n['n'].data.shape[1]:
@@ -300,7 +299,7 @@ def precompute(
                     np.ascontiguousarray(f(np.deg2rad(table[angle]))[
                         argsort_pix])
 
-    for key in ['w', 'e_1', 'e_2', 'm', 'e_rms', 'm_sel', 'R_11', 'R_22',
+    for key in ['w', 'e_1', 'e_2', 'm', 'e_rms', 'R_2', 'R_11', 'R_22',
                 'R_12', 'R_21']:
         if key in table_s.colnames:
             table_engine_s[key] = np.ascontiguousarray(
@@ -359,6 +358,9 @@ def precompute(
             z_min = np.amin(table_l['z'])
             z_max = min(np.amax(table_l['z']),
                         np.amax(table_n['z'][table_n['n'][:, i] > 0]))
+            if z_min == z_max:
+                z_min -= 0.01
+                z_max += 0.01
             z_interp = np.linspace(
                 z_min, z_max, max(10, int((z_max - z_min) / 0.001)))
 
@@ -394,8 +396,8 @@ def precompute(
     table_engine_r = {}
     n_results = len(table_l) * (len(bins) - 1)
 
-    key_list = ['sum 1', 'sum w_ls', 'sum w_ls e_t', 'sum w_ls z_s',
-                'sum w_ls e_t sigma_crit', 'sum w_ls sigma_crit']
+    key_list = ['sum 1', 'sum w_ls', 'sum w_ls e_t', 'sum w_ls e_x', 'sum w_ls z_s',
+                'sum w_ls e_t sigma_crit', 'sum w_ls e_x sigma_crit', 'sum w_ls sigma_crit']
 
     if 'm' in table_s.colnames:
         key_list.append('sum w_ls m')
@@ -403,8 +405,8 @@ def precompute(
     if 'e_rms' in table_s.colnames:
         key_list.append('sum w_ls (1 - e_rms^2)')
 
-    if 'm_sel' in table_s.colnames:
-        key_list.append('sum w_ls m_sel')
+    if 'R_2' in table_s.colnames:
+        key_list.append('sum w_ls A p(R_2=0.3)')
 
     if (('R_11' in table_s.colnames) and ('R_12' in table_s.colnames) and
             ('R_21' in table_s.colnames) and ('R_22' in table_s.colnames)):
@@ -421,11 +423,22 @@ def precompute(
     if not isinstance(bins, u.quantity.Quantity):
         bins = bins * u.Mpc
 
+    # !!!
+    # If I want equal angular bins, tile the same array of theta bins here
+    # instead of converting the radial bin to angular bins for every lens
+    # Would need to then ignore the set radial bins - would it mess something else up?
+    # if theta_bins == None:
     try:
         theta_bins = np.tile(bins.to(u.rad).value, len(table_l))
     except UnitConversionError:
-        theta_bins = (np.tile(bins.to(u.Mpc).value, len(table_l)) /
-                      np.repeat(d_com_l, len(bins))).flatten()
+        if any(rc != 1. for rc in table_l['r_char']):
+            # Unitless if scaling by characteristic radii
+            theta_bins = (np.tile(bins.value, len(table_l)) *
+              np.repeat(table_l['r_char'], len(bins)) /
+              np.repeat(d_com_l, len(bins))).flatten()
+        else:
+            theta_bins = (np.tile(bins.to(u.Mpc).value, len(table_l)) /
+                          np.repeat(d_com_l, len(bins))).flatten()
         if not comoving:
             theta_bins *= (1 + np.repeat(z_l, len(bins))).flatten()
 
@@ -494,5 +507,6 @@ def precompute(
     table_l.meta['Ok0'] = cosmology.Ok0
     table_l.meta['Om0'] = cosmology.Om0
     table_l.meta['weighting'] = weighting
+    table_l.meta['thetas'] = theta_bins[:len(bins)]
 
-    return table_l
+    return table_l, theta_bins, sigma_crit_eff

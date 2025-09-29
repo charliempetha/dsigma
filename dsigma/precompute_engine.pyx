@@ -74,10 +74,10 @@ def precompute_engine(
     if has_e_rms:
         e_rms = table_s['e_rms']
 
-    cdef bint has_m_sel = 'm_sel' in table_s.keys()
-    cdef double[::1] m_sel
-    if has_m_sel:
-        m_sel = table_s['m_sel']
+    cdef bint has_R_2 = 'R_2' in table_s.keys()
+    cdef double[::1] R_2
+    if has_R_2:
+        R_2 = table_s['R_2']
 
     cdef bint has_R_matrix = 'R_11' in table_s.keys()
     cdef double[::1] R_11, R_12, R_21, R_22
@@ -93,6 +93,8 @@ def precompute_engine(
     cdef double[::1] sum_w_ls = table_r['sum w_ls']
     cdef double[::1] sum_w_ls_e_t = table_r['sum w_ls e_t']
     cdef double[::1] sum_w_ls_e_t_sigma_crit = table_r['sum w_ls e_t sigma_crit']
+    cdef double[::1] sum_w_ls_e_x = table_r['sum w_ls e_x']
+    cdef double[::1] sum_w_ls_e_x_sigma_crit = table_r['sum w_ls e_x sigma_crit']
     cdef double[::1] sum_w_ls_sigma_crit = table_r['sum w_ls sigma_crit']
     cdef double[::1] sum_w_ls_z_s = table_r['sum w_ls z_s']
     cdef double[::1] sum_w_ls_m
@@ -101,9 +103,9 @@ def precompute_engine(
     cdef double[::1] sum_w_ls_1_minus_e_rms_sq
     if has_e_rms:
         sum_w_ls_1_minus_e_rms_sq = table_r['sum w_ls (1 - e_rms^2)']
-    cdef double[::1] sum_w_ls_m_sel
-    if has_m_sel:
-        sum_w_ls_m_sel = table_r['sum w_ls m_sel']
+    cdef double[::1] sum_w_ls_A_p_R_2
+    if has_R_2:
+        sum_w_ls_A_p_R_2 = table_r['sum w_ls A p(R_2=0.3)']
     cdef double[::1] sum_w_ls_R_T
     if has_R_matrix:
         sum_w_ls_R_T = table_r['sum w_ls R_T']
@@ -125,10 +127,10 @@ def precompute_engine(
     cdef long offset_bin, offset_result
     cdef double dist_3d_sq_max, dist_3d_sq_ls
     cdef double sin_ra_l_minus_ra_s, cos_ra_l_minus_ra_s
-    cdef double sin_2phi, cos_2phi, tan_phi, tan_phi_num, tan_phi_den, e_t
+    cdef double sin_2phi, cos_2phi, tan_phi, tan_phi_num, tan_phi_den, e_t, e_x
     cdef double w_ls, sigma_crit
     cdef double max_pixrad = 1.05 * hp.pixel_resolution.to(u.deg).value
-    cdef double inf = float('inf'), summand
+    cdef double inf = float('inf'), summand, summandx
 
     if progress_bar:
         pbar = tqdm(total=len(u_pix_l))
@@ -159,7 +161,7 @@ def precompute_engine(
         # Get list of all source pixels that could contain suitable sources.
         pix_s_list = np.fromiter(
             kdtree.query_ball_point(xyz_l[pix_l], sqrt(dist_3d_sq_max)),
-            dtype=int)
+            dtype=long)
         l_pix_s = len(pix_s_list)
 
         # Loop over all suitable source pixels.
@@ -242,14 +244,24 @@ def precompute_engine(
                         sin_2phi = 2.0 * tan_phi / (1.0 + tan_phi * tan_phi)
 
                     e_t = - e_1[i_s] * cos_2phi + e_2[i_s] * sin_2phi
+                    e_x =   e_1[i_s] * sin_2phi + e_2[i_s] * cos_2phi
 
                     sum_1[offset_result + i_bin] += 1
                     summand = w_ls
                     sum_w_ls[offset_result + i_bin] += summand
+
+                    summandx = summand * e_x
                     summand *= e_t
+
                     sum_w_ls_e_t[offset_result + i_bin] += summand
+                    sum_w_ls_e_x[offset_result + i_bin] += summandx
+
                     summand *= sigma_crit
+                    summandx *= sigma_crit
+
                     sum_w_ls_e_t_sigma_crit[offset_result + i_bin] += summand
+                    sum_w_ls_e_x_sigma_crit[offset_result + i_bin] += summandx
+
                     sum_w_ls_z_s[offset_result + i_bin] += w_ls * z_s[i_s]
                     sum_w_ls_sigma_crit[offset_result + i_bin] += w_ls * sigma_crit
                     if has_m:
@@ -257,8 +269,9 @@ def precompute_engine(
                     if has_e_rms:
                         sum_w_ls_1_minus_e_rms_sq[offset_result + i_bin] += (
                             w_ls * (1 - e_rms[i_s] * e_rms[i_s]))
-                    if has_m_sel:
-                        sum_w_ls_m_sel[offset_result + i_bin] += w_ls * m_sel[i_s]
+                    if has_R_2 and R_2[i_s] <= 0.31:
+                        sum_w_ls_A_p_R_2[offset_result + i_bin] += (
+                            0.00865 * w_ls / 0.01)
                     if has_R_matrix:
                         sum_w_ls_R_T[offset_result + i_bin] += w_ls * (
                             R_11[i_s] * cos_2phi * cos_2phi +
