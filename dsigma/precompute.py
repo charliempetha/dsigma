@@ -431,8 +431,7 @@ def precompute(
     try:
         theta_bins = np.tile(bins.to(u.rad).value, len(table_l))
     except UnitConversionError:
-        if any(rc != 1. for rc in table_l['r_char']):
-            # Unitless if scaling by characteristic radii
+        if 'r_char' in table_l.colnames:
             theta_bins = (np.tile(bins.value, len(table_l)) *
               np.repeat(table_l['r_char'], len(bins)) /
               np.repeat(d_com_l, len(bins))).flatten()
