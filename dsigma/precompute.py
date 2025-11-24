@@ -299,7 +299,7 @@ def precompute(
                         argsort_pix])
 
     for key in ['w', 'e_1', 'e_2', 'm', 'e_rms', 'R_2', 'R_11', 'R_22',
-                'R_12', 'R_21']:
+                'R_12', 'R_21', 'zbf']:
         if key in table_s.colnames:
             table_engine_s[key] = np.ascontiguousarray(
                 table_s[key][argsort_pix_s], dtype=np.float64)
@@ -387,7 +387,6 @@ def precompute(
 
     elif table_c is not None and table_s is not None:
         raise ValueError('table_c and table_n cannot both be given.')
-
     # Create arrays that will hold the final results.
     table_engine_r = {}
     n_results = len(table_l) * (len(bins) - 1)
@@ -407,9 +406,18 @@ def precompute(
     if (('R_11' in table_s.colnames) and ('R_12' in table_s.colnames) and
             ('R_21' in table_s.colnames) and ('R_22' in table_s.colnames)):
         key_list.append('sum w_ls R_T')
-
+    if 'zbf' in table_s.colnames:
+        key_list.append('sum_pzbf')
+        zbins_pdf = np.arange(0,1.8,0.002)
     for key in key_list:
-        table_engine_r[key] = np.ascontiguousarray(
+        if key=="sum_pzbf":
+
+            table_engine_r[key] = np.ascontiguousarray(
+            np.zeros(n_results*(len(zbins_pdf)-1), dtype=(
+                np.int64 if key == 'sum 1' else np.float64)))
+                               
+        else:
+            table_engine_r[key] = np.ascontiguousarray(
             np.zeros(n_results, dtype=(
                 np.int64 if key == 'sum 1' else np.float64)))
 
@@ -446,10 +454,9 @@ def precompute(
 
     for i in range(len(u_pix_l)):
         queue.put(i)
-
     args = (u_pix_l, n_pix_l, u_pix_s, n_pix_s, dist_3d_sq_bins,
             table_engine_l, table_engine_s, table_engine_r, bins, comoving,
-            weighting, nside, queue, progress_bar)
+            weighting, nside, queue, progress_bar, zbins_pdf)
 
     if n_jobs == 1:
         precompute_engine(*args)
@@ -459,7 +466,7 @@ def precompute(
             process = mp.Process(target=precompute_engine, args=(*args, ))
             if i == 0:
                 args = list(args)
-                args[-1] = False
+                args[-2] = False
                 args = tuple(args)
             process.start()
             processes.append(process)
@@ -468,7 +475,11 @@ def precompute(
 
     inv_argsort_pix_l = np.argsort(argsort_pix_l)
     for key in table_engine_r.keys():
-        table_l[key] = np.array(table_engine_r[key]).reshape(
+        if key=="sum_pzbf":
+            table_l[key] = np.array(table_engine_r[key]).reshape(
+            len(table_l), len(bins) - 1, len(zbins_pdf)-1)[inv_argsort_pix_l]
+        else:
+            table_l[key] = np.array(table_engine_r[key]).reshape(
             len(table_l), len(bins) - 1)[inv_argsort_pix_l]
 
     table_l['sum w_ls z_l'] = table_l['z'][:, np.newaxis] * table_l['sum w_ls']
@@ -485,7 +496,7 @@ def precompute(
         table_l['sum w_ls z_s'] = (
             table_l['sum w_ls z_s'] - table_l['sum w_ls'] * np.array(
                 table_engine_l['delta z_s'])[inv_argsort_pix_l][:, np.newaxis])
-
+    table_l.meta['zbins_pdf'] = zbins_pdf
     table_l.meta['bins'] = bins
     table_l.meta['comoving'] = comoving
     table_l.meta['H0'] = cosmology.H0.value

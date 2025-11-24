@@ -7,8 +7,17 @@ from sklearn.cluster import DBSCAN, MiniBatchKMeans
 from scipy.spatial import cKDTree
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
+from tqdm import tqdm
 
 from .helpers import spherical_to_cartesian
+import multiprocessing as mp
+from multiprocessing import shared_memory
+from multiprocessing import Pool
+import os
+from joblib import Parallel, delayed
+
+
+
 
 
 __all__ = ["compute_jackknife_fields", "compress_jackknife_fields",
@@ -186,9 +195,33 @@ def smooth_correlation_matrix(cor, sigma, exclude_diagonal=True):
 
     return cor_new
 
+class Register_func:
+    def __init__(self, f, table_l, table_r, table_l_2, table_r_2, kwargs):
+        self.f= f 
+        self.table_l = table_l
+        self.table_r = table_r
+        self.table_l_2 = table_l_2
+        self.table_r_2 = table_r_2
+        self.kwargs = kwargs
+    def __call__(self, field_jk):
+        print("Working..", flush=True)
+        mask_l = self.table_l['field_jk'] != field_jk
+        for name, table in zip(['table_r', 'table_l_2', 'table_r_2'],
+                               [self.table_r, self.table_l_2, self.table_r_2]):
+            if table is not None:
+                self.kwargs[name] = table[table['field_jk'] != field_jk]
+        return self.f(self.table_l[mask_l], **self.kwargs)
+
+
+        
+
+
+    
+    
+
 
 def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
-                         table_r_2=None, **kwargs):
+                         table_r_2=None, njobs=1,  **kwargs):
     """Compute the covariance of a function from jackknife re-sampling.
 
     Parameters
@@ -221,18 +254,19 @@ def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
         Covariance matrix of the result derived from jackknife re-sampling.
 
     """
-    samples = []
 
-    for field_jk in np.unique(table_l['field_jk']):
+    multiprocessingfunction = Register_func(f, table_l, table_r, table_l_2, table_r_2, kwargs)
+    if njobs!=1:
+        #mp.set_start_method('spawn')
+        samples = Parallel(n_jobs=njobs)(delayed(multiprocessingfunction)(i) for i in np.unique(table_l['field_jk']))
+       # try:
+       #     samples = pool.gather(samples)
+       # except:
+       #     pass
 
-        mask_l = table_l['field_jk'] != field_jk
+    else:
+        samples = list(map(multiprocessingfunction, np.unique(table_l['field_jk'])))
 
-        for name, table in zip(['table_r', 'table_l_2', 'table_r_2'],
-                               [table_r, table_l_2, table_r_2]):
-            if table is not None:
-                kwargs[name] = table[table['field_jk'] != field_jk]
-
-        samples.append(f(table_l[mask_l], **kwargs))
-
+        
     return ((len(np.unique(table_l['field_jk'])) - 1) *
             np.cov(np.array(samples), rowvar=False, ddof=0))

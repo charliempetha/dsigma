@@ -7,6 +7,10 @@ from astropy.cosmology import FlatLambdaCDM
 from astropy.units import UnitConversionError
 from . import surveys
 from .physics import mpc_per_degree, lens_magnification_shear_bias
+import jax.numpy as jnp
+import jax
+jax.config.update("jax_enable_x64", True)
+import jaxopt
 
 __all__ = ['number_of_pairs', 'raw_tangential_shear',
            'raw_excess_surface_density', 'photo_z_dilution_factor',
@@ -14,7 +18,7 @@ __all__ = ['number_of_pairs', 'raw_tangential_shear',
            'matrix_shear_response_factor', 'shear_responsivity_factor',
            'mean_lens_redshift', 'mean_source_redshift',
            'mean_critical_surface_density', 'lens_magnification_bias',
-           'tangential_shear', 'excess_surface_density']
+           'tangential_shear', 'excess_surface_density', 'get_boost', 'get_pz']
 
 
 def number_of_pairs(table_l):
@@ -527,3 +531,56 @@ def excess_surface_density(table_l, table_r=None,
         return result['ds'].data
 
     return result
+
+def _get_pz(table):
+    zmid  = 0.5*(table.meta['zbins_pdf'][1:]+table.meta['zbins_pdf'][:-1])
+    pzbf = np.sum(table['sum_pzbf'], axis=0)/np.sum(table['sum w_ls'])
+    pzbf = pzbf/np.trapz(pzbf, zmid, axis=1).reshape(-1,1)
+    return pzbf
+
+def get_pz(table_l, table_r=None):
+    result = Table()
+    result['pz_l'] = _get_pz(table_l)
+    if table_r is not None:
+        result['pz_r'] = _get_pz(table_r)
+    result.meta['z_mid']= 0.5*(table_l.meta['zbins_pdf'][1:]+table_l.meta['zbins_pdf'][:-1])
+    return result
+
+def gaussian(x, mean, std):
+    return 1.0/jnp.sqrt(2.0*jnp.pi)/std*jnp.exp(-1.0*(x-mean)**2.0/(2.0*std**2.0))
+def model_in(params, resultpz):
+    mean = params[0]
+    std = params[1]
+    f = params[2:]
+    if 'pz_r' in resultpz.keys():
+        background = resultpz['pz_r']
+    else:
+        background = resultpz['pz_l'][-1].reshape(1,-1)
+    return f[:, None]*gaussian(resultpz.meta['z_mid'],mean, std).reshape(1,-1)+(1-f)[:, None]*background
+
+def chi2(params, resultpz):
+    data= resultpz['pz_l']
+    mean = params[0]
+    std = params[1]
+    f = params[2:]
+    model = model_in(params, resultpz)
+    pdflistflat = data
+    return jnp.sum(((model-data)[data>0])**2)
+
+def get_boost(table_l, table_r=None, rp=None, method='L-BFGS-B', returnfullparams=False):
+    params_init = jnp.array([0.5,0.01]+[0.5 for i in range(len(rp))])
+    bnds = [(0.0,2), (0.0001, 0.15)]
+    bnds.extend([(0.0,1.0) for i in range(len(params_init[2:]))])
+    resultpz = get_pz(table_l, table_r)
+    fun = lambda x: chi2(x, resultpz)
+    tol = 1e-6
+    method = method # 'SLSQP'
+    options = {'disp':False,'ftol':tol, 'gtol':tol, }
+    jscMin=jaxopt.ScipyBoundedMinimize(fun=fun,
+                                               method=method, 
+                                               tol=tol,
+                                               options=options, maxiter=600)
+    res = jscMin.run(params_init,bounds=jnp.array(bnds).T)
+    if returnfullparams:
+      return res.params 
+    return 1./(1.-res.params[2:])
