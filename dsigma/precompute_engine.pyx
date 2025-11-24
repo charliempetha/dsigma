@@ -11,6 +11,10 @@ from scipy.spatial import cKDTree
 
 from astropy import constants as c
 from astropy import units as u
+from libc.stdio cimport printf
+from libc.math cimport isnan
+
+
 
 
 cdef double sigma_crit_factor = (
@@ -33,7 +37,7 @@ cdef double dist_3d_sq(double sin_ra_1, double cos_ra_1, double sin_dec_1,
 def precompute_engine(
         u_pix_l, n_pix_l_in, u_pix_s, n_pix_s_in, dist_3d_sq_bins_in,
         table_l, table_s, table_r, bins, bint comoving, float weighting,
-        int nside, queue, progress_bar):
+        int nside, queue, progress_bar, zbins):
 
     cdef long[::1] n_pix_l = n_pix_l_in
     cdef long[::1] n_pix_s = n_pix_s_in
@@ -68,6 +72,11 @@ def precompute_engine(
     cdef double[::1] m
     if has_m:
         m = table_s['m']
+
+    cdef bint has_zbf = 'zbf' in table_s.keys()
+    cdef double[::1] zbf
+    if has_zbf:
+        zbf = table_s['zbf']
 
     cdef bint has_e_rms = 'e_rms' in table_s.keys()
     cdef double[::1] e_rms
@@ -109,6 +118,9 @@ def precompute_engine(
     cdef double[::1] sum_w_ls_R_T
     if has_R_matrix:
         sum_w_ls_R_T = table_r['sum w_ls R_T']
+    cdef double[::1] sum_pzbf
+    if has_zbf:
+        sum_pzbf = table_r['sum_pzbf']
 
     hp = HEALPix(nside, order='ring')
     lon, lat = hp.healpix_to_lonlat(np.arange(hp.npix))
@@ -121,16 +133,18 @@ def precompute_engine(
     kdtree = cKDTree(xyz_s)
 
     cdef long pix_l, i_l, i_l_min, i_l_max
-    cdef long pix_s, i_pix_s, l_pix_s, i_s, i_s_min, i_s_max
+    cdef long pix_s, i_pix_s, l_pix_s, i_s, i_s_min, i_s_max, i_z
     cdef long[::1] pix_s_list
     cdef long i_bin, n_bins = len(bins) - 1
-    cdef long offset_bin, offset_result
+    cdef long nzbins = len(zbins)-1
+    cdef long offset_bin, offset_result, offset_result2_1
     cdef double dist_3d_sq_max, dist_3d_sq_ls
     cdef double sin_ra_l_minus_ra_s, cos_ra_l_minus_ra_s
     cdef double sin_2phi, cos_2phi, tan_phi, tan_phi_num, tan_phi_den, e_t, e_x
     cdef double w_ls, sigma_crit
     cdef double max_pixrad = 1.05 * hp.pixel_resolution.to(u.deg).value
     cdef double inf = float('inf'), summand, summandx
+    cdef i_z_f
 
     if progress_bar:
         pbar = tqdm(total=len(u_pix_l))
@@ -178,6 +192,8 @@ def precompute_engine(
             for i_l in range(i_l_min, i_l_max):
 
                 offset_result = i_l * n_bins
+                offset_result2_1 = i_l*n_bins*nzbins
+
                 offset_bin = i_l * (n_bins + 1)
 
                 # Loop over all sources in the pixel.
@@ -277,6 +293,14 @@ def precompute_engine(
                             R_11[i_s] * cos_2phi * cos_2phi +
                             R_22[i_s] * sin_2phi * sin_2phi +
                             (R_12[i_s] + R_21[i_s]) * sin_2phi * cos_2phi)
+                    if has_zbf:
+                           i_z_f = (zbf[i_s]-zbins[0])/(zbins[1]-zbins[0])
+                           if isnan(i_z_f):
+                               continue
+                           else:
+                               i_z=int(i_z_f)
+                               if (i_z<nzbins-1) and (i_z>=0):
+                                    sum_pzbf[offset_result2_1 + i_bin*nzbins+i_z] += w_ls
 
         if progress_bar:
             pbar.update(pix_l + 1 - pbar.n)
