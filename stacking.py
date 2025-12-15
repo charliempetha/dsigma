@@ -354,7 +354,8 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
                      matrix_shear_response_correction=False,
                      shear_responsivity_correction=False,
                      hsc_selection_bias_correction=False,
-                     random_subtraction=False, return_table=False):
+                     random_subtraction=False, cross=False,
+                     return_table=False):
     """Compute the mean tangential shear with corrections, if applicable.
 
     Parameters
@@ -411,6 +412,10 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
     result['ex'] = raw_cross_shear(table_l)
     result['z_l'] = mean_lens_redshift(table_l)
     result['z_s'] = mean_source_redshift(table_l)
+
+    if not return_table:
+        if cross:
+            return result['ex'].data
 
     if boost_correction:
         if table_r is None:
