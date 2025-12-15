@@ -58,6 +58,25 @@ def raw_tangential_shear(table_l):
             np.sum(table_l['sum w_ls'].data * table_l['w_sys'].data[:, None],
                    axis=0))
 
+def raw_cross_shear(table_l):
+    """Compute the average tangential shear for a catalog.
+
+    Parameters
+    ----------
+    table_l : astropy.table.Table
+        Precompute results for the lenses.
+
+    Returns
+    -------
+    delta_sigma : numpy.ndarray
+        The raw, uncorrected tangential shear in each radial bin.
+
+    """
+    return (np.sum(table_l['sum w_ls e_x'].data *
+                   table_l['w_sys'].data[:, None], axis=0) /
+            np.sum(table_l['sum w_ls'].data * table_l['w_sys'].data[:, None],
+                   axis=0))
+
 
 def raw_excess_surface_density(table_l):
     """Compute the raw, uncorrected excess surface density for a catalog.
@@ -389,6 +408,7 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
     result['rp'] = np.sqrt(result['rp_min'] * result['rp_max'])
     result['et_raw'] = raw_tangential_shear(table_l)
     result['et'] = raw_tangential_shear(table_l)
+    result['ex'] = raw_cross_shear(table_l)
     result['z_l'] = mean_lens_redshift(table_l)
     result['z_s'] = mean_source_redshift(table_l)
 
