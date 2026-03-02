@@ -520,6 +520,9 @@ def precompute(
     table_l.meta['Ok0'] = cosmology.Ok0
     table_l.meta['Om0'] = cosmology.Om0
     table_l.meta['weighting'] = weighting
-    table_l.meta['thetas'] = theta_bins[:len(bins)]
-
+    if 'r_char' in table_l.colnames:
+        # No uniform angular bins when scaling by r_char
+        table_l.meta['thetas'] = np.ones(len(bins)) * np.nan
+    else:
+        table_l.meta['thetas'] = theta_bins[:len(bins)]
     return table_l, theta_bins, sigma_crit_eff
