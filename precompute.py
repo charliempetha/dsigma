@@ -329,6 +329,8 @@ def precompute(
             z_interp, cosmology.comoving_transverse_distance(z_interp).to(
                 u.Mpc).value)(table['z'])[argsort_pix])
 
+    sigma_crit_eff = None
+
     if table_c is not None and table_n is None:
         z_min = np.amin(table_l['z'])
         z_max = np.amax(table_l['z'])
