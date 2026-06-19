@@ -8,25 +8,25 @@ from astropy.units import UnitConversionError
 from . import surveys
 from .physics import mpc_per_degree, lens_magnification_shear_bias
 
-# try:
-#     import mlx.core as mx
-#     import mlx.optimizers as optim
-
-#     BACKEND = "mlx"
-
-# except ImportError:
 try:
-    import jax
-    import jax.numpy as jnp
-    import jaxopt
+    import mlx.core as mx
+    import mlx.optimizers as optim
 
-    BACKEND = "jax"
+    BACKEND = "mlx"
 
 except ImportError:
-    import numpy as np
-    from scipy.optimize import minimize
+    try:
+        import jax
+        import jax.numpy as jnp
+        import jaxopt
 
-    BACKEND = "scipy"
+        BACKEND = "jax"
+
+    except ImportError:
+        import numpy as np
+        from scipy.optimize import minimize
+
+BACKEND = "scipy"
 
 __all__ = [
     "number_of_pairs",
@@ -867,16 +867,18 @@ def evaluate_boost_fit(
 
     model = f[:, None] * g[None, :] + (1 - f)[:, None] * background
 
-    frac_res = (model - data) / (data + 1e-8)
+    residuals = model - data  # / (data + 1e-8)
     boost = 1.0 / (1.0 - f)
 
-    return z_mid, data, model, frac_res, boost
+    return z_mid, data, model, residuals, boost
 
 
 def plot_boost_fit(mean, std, f, resultpz, rp):
     import matplotlib.pyplot as plt
 
-    z_mid, data, model, frac_res, boost = evaluate_boost_fit(mean, std, f, resultpz, rp)
+    z_mid, data, model, residuals, boost = evaluate_boost_fit(
+        mean, std, f, resultpz, rp
+    )
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
@@ -908,12 +910,12 @@ def plot_boost_fit(mean, std, f, resultpz, rp):
     # -------------------------
     ax = axes[2]
     for i in range(len(rp)):
-        ax.plot(z_mid, frac_res[i])
+        ax.plot(z_mid, residuals[i])
 
     ax.axhline(0, color="k", linestyle="--")
-    ax.set_title("Fractional Residuals")
+    ax.set_title("Residuals")
     ax.set_xlabel("z")
-    ax.set_ylabel(" (model - data) / data")
+    ax.set_ylabel("model - data")
 
     plt.tight_layout()
     plt.savefig(f"boost_fit_{BACKEND}.png", dpi=300)
