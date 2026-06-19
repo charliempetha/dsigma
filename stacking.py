@@ -7,9 +7,26 @@ from astropy.cosmology import FlatLambdaCDM
 from astropy.units import UnitConversionError
 from . import surveys
 from .physics import mpc_per_degree, lens_magnification_shear_bias
-from scipy.optimize import minimize
-import mlx.core as mx
-import mlx.optimizers as optim
+
+# try:
+#     import mlx.core as mx
+#     import mlx.optimizers as optim
+
+#     BACKEND = "mlx"
+
+# except ImportError:
+try:
+    import jax
+    import jax.numpy as jnp
+    import jaxopt
+
+    BACKEND = "jax"
+
+except ImportError:
+    import numpy as np
+    from scipy.optimize import minimize
+
+    BACKEND = "scipy"
 
 __all__ = [
     "number_of_pairs",
@@ -643,164 +660,261 @@ def get_pz(table_l, table_r=None):
     return result
 
 
-def gaussian(x: mx.array, mean: mx.array, std: mx.array) -> mx.array:
-    # Normalised Gaussian — models the redshift distribution of cluster contaminants
-    return mx.exp(-0.5 * ((x - mean) / std) ** 2) / (
-        std * mx.sqrt(mx.array(2.0 * np.pi))
-    )
+if BACKEND == "mlx":
 
+    def gaussian(x, mean, std):
+        return mx.exp(-0.5 * ((x - mean) / std) ** 2) / (
+            std * mx.sqrt(mx.array(2.0 * np.pi))
+        )
 
-def model_fn(mean, std, f, z_mid, background):
-    """
-    mean, std : scalars — shared Gaussian centre and width across all rp bins
-    f         : (n_rp,) — per-bin contamination fraction
-    z_mid     : (n_z,)
-    background: (1, n_z) or (n_rp, n_z)
-    returns   : (n_rp, n_z)
-    """
-    g = gaussian(z_mid, mean, std)  # (n_z,) cluster p(z) template
-    print(f"g shape: {g.shape}")
-    print(f"f shape: {f.shape}")  # must be (n_rp,) = (17,)
-    print(f"background shape: {background.shape}")  # must be (1, 899)
-    # Each rp bin's p(z) = f * cluster + (1-f) * background
-    return f[:, None] * g[None, :] + (1.0 - f)[:, None] * background
+    def model_fn(mean, std, f, z_mid, background):
+        g = gaussian(z_mid, mean, std)
+        return f[:, None] * g[None, :] + (1.0 - f)[:, None] * background
 
+    def chi2_fn(mean, std, f, data, z_mid, background):
+        model = model_fn(mean, std, f, z_mid, background)
+        residuals = model - data
+        mask = data > 0
+        return mx.sum((residuals**2) * mask)
 
-def chi2_fn(mean, std, f, data, z_mid, background):
-    model = model_fn(mean, std, f, z_mid, background)
-    residuals = model - data  # (n_rp, n_z) per-bin, per-z residuals
-    # Mask empty redshift cells multiplicatively — avoids boolean scatter on GPU
-    weights = mx.maximum(data, mx.zeros_like(data))
-    return mx.sum((residuals**2) * (weights > 0))
+    _chi2_grad = mx.value_and_grad(chi2_fn, argnums=(0, 1, 2))
 
+    def _project(mean, std, f):
+        mean = mx.clip(mean, 0.0, 2.0)
+        std = mx.clip(std, 1e-4, 0.15)
+        f = mx.clip(f, 0.0, 1.0)
+        return mean, std, f
 
-# Compute loss and gradients w.r.t. mean, std, and f in one Metal pass
-_chi2_grad = mx.value_and_grad(chi2_fn, argnums=(0, 1, 2))
+    def optimize(table_l, table_r=None, rp=None, n_iter=10000, lr=1e-3, tol=1e-5):
+        resultpz = get_pz(table_l, table_r)
 
-# ── bounded gradient descent with Adam + projection ───────────────────────────
+        data = mx.array(resultpz["pz_l"].astype(np.float64))
+        z_mid = mx.array(resultpz.meta["z_mid"].astype(np.float64))
 
+        if "pz_r" in resultpz.colnames:
+            background = mx.array(resultpz["pz_r"].astype(np.float64))
+        else:
+            background = data[-1:, :]
 
-def _project(mean, std, f):
-    # Hard-clip parameters back into physical bounds after each gradient step
-    mean = mx.clip(mean, 0.0, 2.0)  # cluster redshift in [0, 2]
-    std = mx.clip(std, 0.0001, 0.15)  # width must be positive and narrow
-    f = mx.clip(f, 0.0, 1.0)  # contamination fraction in [0, 1]
-    return mean, std, f
+        mean = mx.array(0.4)
+        std = mx.array(0.05)
+        f = mx.full((len(rp),), 0.3)
+
+        scheduler = optim.cosine_decay(init=lr, decay_steps=n_iter)
+        optimizer = optim.Adam(learning_rate=scheduler)
+
+        prev_loss = float("inf")
+
+        for i in range(n_iter):
+            loss, (g_mean, g_std, g_f) = _chi2_grad(
+                mean, std, f, data, z_mid, background
+            )
+
+            params = {"mean": mean, "std": std, "f": f}
+            grads = {"mean": g_mean, "std": g_std, "f": g_f}
+
+            updated = optimizer.apply_gradients(grads, params)
+
+            mean, std, f = updated["mean"], updated["std"], updated["f"]
+            mean, std, f = _project(mean, std, f)
+            mx.eval(mean, std, f)
+
+            loss_val = float(loss)
+
+            if abs(loss_val - prev_loss) < tol:
+                break
+            prev_loss = loss_val
+
+        return float(mean), float(std), np.array(f), resultpz
+
+elif BACKEND == "jax":
+
+    def gaussian(x, mean, std):
+        return (
+            1.0
+            / jnp.sqrt(2.0 * jnp.pi)
+            / std
+            * jnp.exp(-((x - mean) ** 2) / (2.0 * std**2))
+        )
+
+    def model_fn(params, resultpz):
+        mean = params[0]
+        std = params[1]
+        f = params[2:]
+
+        if "pz_r" in resultpz.colnames:
+            background = resultpz["pz_r"]
+        else:
+            background = resultpz["pz_l"][-1].reshape(1, -1)
+
+        g = gaussian(resultpz.meta["z_mid"], mean, std)
+        return f[:, None] * g.reshape(1, -1) + (1 - f)[:, None] * background
+
+    def chi2(params, resultpz):
+        data = resultpz["pz_l"]
+        model = model_fn(params, resultpz)
+        return jnp.sum(((model - data)[data > 0]) ** 2)
+
+    def optimize(table_l, table_r=None, rp=None, **kwargs):
+        resultpz = get_pz(table_l, table_r)
+
+        params_init = jnp.array([0.5, 0.01] + [0.5] * len(rp))
+
+        bounds = [(0.0, 2), (1e-4, 0.15)]
+        bounds.extend([(0.0, 1.0)] * len(rp))
+
+        fun = lambda x: chi2(x, resultpz)
+
+        solver = jaxopt.ScipyBoundedMinimize(
+            fun=fun,
+            method="L-BFGS-B",
+            tol=1e-6,
+            maxiter=600,
+        )
+
+        res = solver.run(params_init, bounds=jnp.array(bounds).T)
+
+        params = np.array(res.params)
+        return params[0], params[1], params[2:], resultpz
+
+else:
+
+    def gaussian(x, mean, std):
+        return (
+            1.0
+            / np.sqrt(2.0 * np.pi)
+            / std
+            * np.exp(-((x - mean) ** 2) / (2.0 * std**2))
+        )
+
+    def model_fn(params, resultpz):
+        mean = params[0]
+        std = params[1]
+        f = params[2:]
+
+        if "pz_r" in resultpz.colnames:
+            background = resultpz["pz_r"]
+        else:
+            background = resultpz["pz_l"][-1].reshape(1, -1)
+
+        g = gaussian(resultpz.meta["z_mid"], mean, std)
+        return f[:, None] * g.reshape(1, -1) + (1 - f)[:, None] * background
+
+    def chi2(params, resultpz):
+        data = resultpz["pz_l"]
+        model = model_fn(params, resultpz)
+        return np.sum(((model - data)[data > 0]) ** 2)
+
+    def optimize(table_l, table_r=None, rp=None, **kwargs):
+        resultpz = get_pz(table_l, table_r)
+
+        params_init = np.array([0.5, 0.01] + [0.5] * len(rp))
+
+        bounds = [(0.0, 2), (1e-4, 0.15)]
+        bounds.extend([(0.0, 1.0)] * len(rp))
+
+        res = minimize(
+            lambda x: chi2(x, resultpz),
+            params_init,
+            bounds=bounds,
+            method="L-BFGS-B",
+        )
+
+        params = res.x
+        return params[0], params[1], params[2:], resultpz
 
 
 def get_boost(
     table_l,
     table_r=None,
     rp=None,
-    n_iter=10000,
-    lr=1e-3,
-    tol=1e-5,
     returnfullparams=False,
     plot=False,
+    **kwargs,
 ):
-    n_rp = len(rp)
-    resultpz = get_pz(table_l, table_r)
-
-    # Transfer data to MLX arrays — from this point all ops run on the M4 Pro GPU
-    data = mx.array(resultpz["pz_l"].astype(np.float64))  # (n_rp, n_z) observed p(z)
-    z_mid = mx.array(resultpz.meta["z_mid"].astype(np.float64))  # (n_z,) redshift grid
-    if "pz_r" in resultpz.colnames:
-        background = mx.array(resultpz["pz_r"].astype(np.float64))[
-            None, :
-        ]  # explicit background catalogue
-    else:
-        background = data[-1:, :]  # fall back to outermost rp bin as background proxy
-
-    # Initialise
-    mean = mx.array(0.4)
-    std = mx.array(0.05)
-    f = mx.full((n_rp,), 0.3)
-
-    # Cosine decay: fast early steps, fine-grained near convergence
-    scheduler = optim.cosine_decay(init=lr, decay_steps=n_iter)
-    optimizer = optim.Adam(learning_rate=scheduler)
-
-    prev_loss = float("inf")
-
-    def step(mean, std, f):
-        (loss, (g_mean, g_std, g_f)) = _chi2_grad(mean, std, f, data, z_mid, background)
-        params = {"mean": mean, "std": std, "f": f}
-        grads = {"mean": g_mean, "std": g_std, "f": g_f}
-        updated = optimizer.apply_gradients(grads, params)
-        mean, std, f = updated["mean"], updated["std"], updated["f"]
-        mean, std, f = _project(mean, std, f)
-        return mean, std, f, loss
-
-    for i in range(n_iter):
-        mean, std, f, loss = step(mean, std, f)
-        mx.eval(mean, std, f)
-
-        loss_val = float(loss)
-        if i % 200 == 0:
-            print(
-                f"iter {i:4d}  loss={loss_val:.6e}  mean={float(mean):.4f}  std={float(std):.5f}"
-            )
-
-        # Stop early if loss change is below tolerance
-        if abs(loss_val - prev_loss) < tol:
-            print(f"Converged at iter {i}  loss={loss_val:.6e}")
-            break
-        prev_loss = loss_val
-
-    boost_factors = 1.0 / (1.0 - np.array(f))
-
+    print("Fitting boost factor model to p(z) data using backend:", BACKEND)
+    mean, std, f, resultpz = optimize(
+        table_l,
+        table_r=table_r,
+        rp=rp,
+        **kwargs,
+    )
     if plot:
-        model = model_fn(mean, std, f, z_mid, background)
-        mx.eval(model)
-
-        # Materialise all MLX arrays once before plotting
-        model_np = np.array(model)
-        data_np = np.array(data)
-        z_mid_np = np.array(z_mid)
-        residuals_np = model_np - data_np
-        mean_f = float(mean)
-        std_f = float(std)
-
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(1, 3, figsize=(3 * 8.6 / 2.54, 8.6 / 2.54))
-
-        ax = axes[0]
-        for i in range(len(rp)):
-            ax.plot(
-                z_mid_np, data_np[i], color=f"C{i}", lw=1.5, label=f"rp={rp[i]:.2f}"
-            )
-            ax.plot(z_mid_np, model_np[i], color=f"C{i}", lw=1.5, ls="--")
-        ax.set_xlabel("z")
-        ax.set_ylabel("p(z)")
-        ax.set_title("Solid=data, dashed=model")
-        ax.legend(fontsize=6)
-
-        ax = axes[1]
-        ax.plot(rp, boost_factors, "o-")
-        ax.axhline(1.0, color="k", ls="--", lw=0.8)
-        ax.set_xlabel("rp")
-        ax.set_ylabel("B(rp) = 1/(1-f)")
-        ax.set_title(f"mean={mean_f:.4f}, std={std_f:.4f}")
-
-        ax = axes[2]
-        for i in range(len(rp)):
-            ax.plot(
-                z_mid_np,
-                residuals_np[i],
-                color=f"C{i}",
-                lw=1.0,
-                label=f"rp={rp[i]:.2f}",
-            )
-        ax.axhline(0.0, color="k", ls="--", lw=0.8)
-        ax.set_xlabel("z")
-        ax.set_ylabel("model - data")
-        ax.set_title("Residuals per rp bin")
-        ax.legend(fontsize=6)
-
-        plt.tight_layout()
-        plt.show()
-
+        plot_boost_fit(mean, std, f, resultpz, rp)
     if returnfullparams:
-        return np.array([float(mean), float(std)] + list(np.array(f)))
-    return boost_factors
+        return np.array([mean, std] + list(f))
+
+    return 1.0 / (1.0 - np.array(f))
+
+
+def evaluate_boost_fit(
+    mean,
+    std,
+    f,
+    resultpz,
+    rp,
+):
+    z_mid = np.array(resultpz.meta["z_mid"])
+    data = np.array(resultpz["pz_l"])
+
+    if "pz_r" in resultpz.colnames:
+        background = np.array(resultpz["pz_r"])
+    else:
+        background = data[-1:, :]
+
+    # Gaussian model
+    g = np.exp(-0.5 * ((z_mid - mean) / std) ** 2) / (std * np.sqrt(2 * np.pi))
+
+    model = f[:, None] * g[None, :] + (1 - f)[:, None] * background
+
+    frac_res = (model - data) / (data + 1e-8)
+    boost = 1.0 / (1.0 - f)
+
+    return z_mid, data, model, frac_res, boost
+
+
+def plot_boost_fit(mean, std, f, resultpz, rp):
+    import matplotlib.pyplot as plt
+
+    z_mid, data, model, frac_res, boost = evaluate_boost_fit(mean, std, f, resultpz, rp)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+    # -------------------------
+    # (1) p(z): data vs model
+    # -------------------------
+    ax = axes[0]
+    for i in range(len(rp)):
+        ax.plot(z_mid, data[i], label=f"rp={rp[i]:.2f}")
+        ax.plot(z_mid, model[i], linestyle="--")
+
+    ax.set_title("p(z): data vs model")
+    ax.set_xlabel("z")
+    ax.set_ylabel("p(z)")
+    ax.legend(fontsize=7)
+
+    # -------------------------
+    # (2) contamination / boost
+    # -------------------------
+    ax = axes[1]
+    ax.semilogx(rp, boost, "o-")
+    ax.axhline(1.0, linestyle="--", color="k")
+    ax.set_title("Boost factor")
+    ax.set_xlabel("r_p")
+    ax.set_ylabel("B(r_p)")
+
+    # -------------------------
+    # (3) residuals
+    # -------------------------
+    ax = axes[2]
+    for i in range(len(rp)):
+        ax.plot(z_mid, frac_res[i])
+
+    ax.axhline(0, color="k", linestyle="--")
+    ax.set_title("Fractional Residuals")
+    ax.set_xlabel("z")
+    ax.set_ylabel(" (model - data) / data")
+
+    plt.tight_layout()
+    plt.savefig(f"boost_fit_{BACKEND}.png", dpi=300)
+    plt.show()

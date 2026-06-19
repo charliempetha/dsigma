@@ -8,7 +8,6 @@ from scipy.spatial import cKDTree
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
 
-# from tqdm import tqdm
 from .stacking import get_boost
 from .helpers import spherical_to_cartesian
 
