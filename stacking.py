@@ -26,7 +26,7 @@ except ImportError:
         import numpy as np
         from scipy.optimize import minimize
 
-BACKEND = "scipy"
+        BACKEND = "scipy"
 
 __all__ = [
     "number_of_pairs",
