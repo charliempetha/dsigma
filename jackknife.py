@@ -24,7 +24,8 @@ __all__ = [
 ]
 
 
-def compute_jackknife_fields(table, centers, distance_threshold=1, weights=None):
+def compute_jackknife_fields(table, centers, distance_threshold=1,
+                             weights=None, seed=None):
     """Compute the centers for jackknife regions using DBSCAN and KMeans.
 
     The function first runs DBSCAN to identify continous fields of points.
@@ -50,6 +51,9 @@ def compute_jackknife_fields(table, centers, distance_threshold=1, weights=None)
     weights : None or numpy.ndarray
         Per-lens weights for clustering. If None, assume the same weight for
         all points. Default is None.
+    seed : int or None, optional
+        Random seed to initialize the random number generator. Default is
+        ``None``.
 
     Returns
     -------
@@ -57,13 +61,14 @@ def compute_jackknife_fields(table, centers, distance_threshold=1, weights=None)
         The coordinates of the centers of the jackknife regions.
 
     """
-    x, y, z = spherical_to_cartesian(table["ra"].data, table["dec"].data)
+    x, y, z = spherical_to_cartesian(table['ra'].data, table['dec'].data)
     xyz = np.column_stack((x, y, z))
-    xyz = np.column_stack(spherical_to_cartesian(table["ra"].data, table["dec"].data))
+    xyz = np.column_stack(spherical_to_cartesian(
+        table['ra'].data, table['dec'].data))
 
     if isinstance(centers, np.ndarray):
         kdtree = cKDTree(centers)
-        table["field_jk"] = kdtree.query(xyz)[1]
+        table['field_jk'] = kdtree.query(xyz)[1]
         return centers
 
     if weights is None:
@@ -74,22 +79,21 @@ def compute_jackknife_fields(table, centers, distance_threshold=1, weights=None)
     if not isinstance(distance_threshold, u.quantity.Quantity):
         distance_threshold *= u.deg
 
-    eps = np.sqrt(2 - 2 * np.cos(distance_threshold.to(u.rad).value))
-    c = DBSCAN(eps=eps, algorithm="kd_tree").fit(xyz).labels_
+    eps = np.sqrt(
+        2 - 2 * np.cos(distance_threshold.to(u.rad).value))
+    c = DBSCAN(eps=eps, algorithm='kd_tree').fit(xyz).labels_
 
     w_c = np.bincount(c[c != -1], weights=weights[c != -1])
     if n_jk < len(w_c):
         raise RuntimeError(
-            "The number of jackknife regions cannot be smaller than the "
-            + "number of continous fields. Try increasing `distance_threshold`"
-            + " or decreasing `centers`."
-        )
+            "The number of jackknife regions cannot be smaller than the " +
+            "number of continous fields. Try increasing `distance_threshold`" +
+            " or decreasing `centers`.")
 
     # Assign the number of jackknife fields according to the total number of
     # objects in each field.
-    n_jk_per_c = np.diff(
-        np.rint(np.cumsum(w_c) / np.sum(w_c) * n_jk).astype(int), prepend=0
-    )
+    n_jk_per_c = np.diff(np.rint(
+        np.cumsum(w_c) / np.sum(w_c) * n_jk).astype(int), prepend=0)
 
     # It can happen that one field is assigned 0 jackknife fields. In this
     # case, we will assign 1.
@@ -97,29 +101,20 @@ def compute_jackknife_fields(table, centers, distance_threshold=1, weights=None)
         n_jk_per_c[np.argmin(n_jk_per_c)] += 1
         n_jk_per_c[np.argmax(n_jk_per_c)] -= 1
 
+    rng = np.random.default_rng(seed)
+
     init = np.zeros((0, 3))
     for i in range(len(w_c)):
         mask = i != c
         if w_c[i] > 0:
-            init = np.vstack(
-                [
-                    init,
-                    xyz[~mask][
-                        np.random.choice(
-                            np.sum(~mask),
-                            n_jk_per_c[i],
-                            replace=False,
-                            p=weights[~mask] / w_c[i],
-                        )
-                    ],
-                ]
-            )
+            init = np.vstack([init, xyz[~mask][np.random.choice(
+                np.sum(~mask), n_jk_per_c[i], replace=False,
+                p=weights[~mask] / w_c[i])]])
 
-    centers = (
-        MiniBatchKMeans(n_clusters=n_jk, init=init, n_init=1)
-        .fit(xyz[weights > 0], sample_weight=weights[weights > 0])
-        .cluster_centers_
-    )
+    kmeans = MiniBatchKMeans(n_clusters=n_jk, init=init, n_init=1,
+                             random_state=int(rng.integers(2**31)))
+    centers = kmeans.fit(
+        xyz[weights > 0], sample_weight=weights[weights > 0]).cluster_centers_
     compute_jackknife_fields(table, centers)
 
     return centers

@@ -25,7 +25,7 @@ __all__ = ["compute_jackknife_fields", "compress_jackknife_fields",
 
 
 def compute_jackknife_fields(table, centers, distance_threshold=1,
-                             weights=None):
+                             weights=None, seed=None):
     """Compute the centers for jackknife regions using DBSCAN and KMeans.
 
     The function first runs DBSCAN to identify continous fields of points.
@@ -51,6 +51,9 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
     weights : None or numpy.ndarray
         Per-lens weights for clustering. If None, assume the same weight for
         all points. Default is None.
+    seed : int or None, optional
+        Random seed to initialize the random number generator. Default is
+        ``None``.
 
     Returns
     -------
@@ -98,6 +101,8 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
         n_jk_per_c[np.argmin(n_jk_per_c)] += 1
         n_jk_per_c[np.argmax(n_jk_per_c)] -= 1
 
+    rng = np.random.default_rng(seed)
+
     init = np.zeros((0, 3))
     for i in range(len(w_c)):
         mask = i != c
@@ -106,7 +111,9 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
                 np.sum(~mask), n_jk_per_c[i], replace=False,
                 p=weights[~mask] / w_c[i])]])
 
-    centers = MiniBatchKMeans(n_clusters=n_jk, init=init, n_init=1).fit(
+    kmeans = MiniBatchKMeans(n_clusters=n_jk, init=init, n_init=1,
+                             random_state=int(rng.integers(2**31)))
+    centers = kmeans.fit(
         xyz[weights > 0], sample_weight=weights[weights > 0]).cluster_centers_
     compute_jackknife_fields(table, centers)
 
@@ -197,7 +204,7 @@ def smooth_correlation_matrix(cor, sigma, exclude_diagonal=True):
 
 class Register_func:
     def __init__(self, f, table_l, table_r, table_l_2, table_r_2, kwargs):
-        self.f= f 
+        self.f= f
         self.table_l = table_l
         self.table_r = table_r
         self.table_l_2 = table_l_2
@@ -213,11 +220,11 @@ class Register_func:
         return self.f(self.table_l[mask_l], **self.kwargs)
 
 
-        
 
 
-    
-    
+
+
+
 
 
 def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
@@ -267,6 +274,6 @@ def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
     else:
         samples = list(map(multiprocessingfunction, np.unique(table_l['field_jk'])))
 
-        
+
     return ((len(np.unique(table_l['field_jk'])) - 1) *
             np.cov(np.array(samples), rowvar=False, ddof=0))
