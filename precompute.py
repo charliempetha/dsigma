@@ -444,7 +444,7 @@ def precompute(
         theta_bins = np.tile(bins.to(u.rad).value, len(table_l))
     except UnitConversionError:
         if 'r_char' in table_l.colnames:
-            theta_bins = (np.tile(bins.value, len(table_l)) *
+            theta_bins = (np.tile(bins.to(u.Mpc).value, len(table_l)) *
               np.repeat(table_l['r_char'], len(bins)) /
               np.repeat(d_com_l, len(bins))).flatten()
         else:
@@ -525,6 +525,8 @@ def precompute(
     if 'r_char' in table_l.colnames:
         # No uniform angular bins when scaling by r_char
         table_l.meta['thetas'] = np.ones(len(bins)) * np.nan
+        table_l.meta['theta_max'] = np.max(theta_bins)
     else:
         table_l.meta['thetas'] = theta_bins[:len(bins)]
+        table_l.meta['theta_max'] = np.max(theta_bins)
     return table_l, theta_bins, sigma_crit_eff

@@ -2,11 +2,13 @@
 
 import warnings
 import numpy as np
+import healpy as hp
 import astropy.units as u
 from sklearn.cluster import DBSCAN, MiniBatchKMeans
 from scipy.spatial import cKDTree
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
+from scipy.spatial import SphericalVoronoi
 
 from .stacking import get_boost
 from .helpers import spherical_to_cartesian
@@ -21,6 +23,7 @@ __all__ = [
     "compress_jackknife_fields",
     "smooth_correlation_matrix",
     "jackknife_resampling",
+    "jackknife_field_sizes",
 ]
 
 
@@ -274,3 +277,26 @@ def jackknife_resampling(
         samples = list(map(_sample, fields))
 
     return (len(fields) - 1) * np.cov(np.array(samples), rowvar=False, ddof=0)
+
+def jackknife_field_sizes(centers):
+    """Characteristic angular size of each JK subregion, following the usage
+    in Shirasaki et al. 2017 (jackknife covariance is trustworthy only for
+    separations below this scale).
+
+    Size is defined as the diameter of a circle with the same area as the
+    subregion's exact spherical Voronoi cell: size = 2*sqrt(area/pi).
+    This gives one number per field regardless of subregion shape, with no
+    resolution parameter (unlike HEALPix pixel counting).
+
+    Note: this uses the full Voronoi cell area, so subregions on the edge
+    of the survey footprint (extending into unsurveyed sky) will read as
+    larger than their true galaxy-covered extent. See the footprint-clipped
+    version below if that matters for your case.
+    """
+    centers_unit = centers / np.linalg.norm(centers, axis=1, keepdims=True)
+    sv = SphericalVoronoi(centers_unit)
+    sv.sort_vertices_of_regions()
+    areas_sr = sv.calculate_areas()
+
+    sizes_deg = np.degrees(2 * np.sqrt(areas_sr / np.pi))
+    return sizes_deg
