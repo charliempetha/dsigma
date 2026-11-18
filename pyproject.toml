@@ -12,7 +12,7 @@ keywords = ["astronomy", "weak-lensing"]
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = ["numpy", "astropy", "scipy", "scikit-learn", "astropy-healpix",
-                "tqdm"]
+                "tqdm", "jax", "jaxopt"]
 dynamic = ["version"]
 
 [project.urls]

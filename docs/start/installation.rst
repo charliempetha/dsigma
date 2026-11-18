@@ -26,10 +26,24 @@ Additionally, for calculating the lens magnification bias, the installation of t
 Manual Installation
 -------------------
 
-You can install :code:`dsigma` directly from the source code. This allows you to, for example, use versions of :code:`dsigma` not yet released on PyPI and to change compiler flags for the C code. The following code will install the most recent version of :code:`dsigma` on GitHub.
+You can install :code:`dsigma` directly from this source repository. The
+installable package is in the :code:`dsigma/` directory; similarly named files
+at the repository root are not included in the package build.
+
+The following code installs a source checkout:
 
 .. code-block:: none
 
-    git clone https://github.com/johannesulf/dsigma.git
+    git clone https://github.com/charliempetha/dsigma.git
     cd dsigma
-    pip install .
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip setuptools wheel
+    python -m pip install .
+
+For development, use an editable installation so changes under
+:code:`dsigma/` are reflected immediately:
+
+.. code-block:: none
+
+    python -m pip install -e .
