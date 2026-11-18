@@ -19,7 +19,8 @@ def test_jackknife(test_catalogs, n_jk):
 
     n_bins = 30
     theta_bins = np.logspace(0, 1, n_bins + 1) * u.deg
-    table_l = precompute.precompute(table_l, table_s, theta_bins)
+    table_l, theta_bins, sigma_crit_eff = precompute.precompute(
+        table_l, table_s, theta_bins)
 
     # There should be no tangential shear. So no shear should be detected
     # with high signficance and we should expect roughly a chi^2 distribution.

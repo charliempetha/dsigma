@@ -328,6 +328,8 @@ def precompute(
             z_interp, cosmology.comoving_transverse_distance(z_interp).to(
                 u.Mpc).value)(table['z'])[argsort_pix])
 
+    sigma_crit_eff = None
+
     if table_c is not None and table_n is None:
         z_min = np.amin(table_l['z'])
         z_max = np.amax(table_l['z'])
@@ -412,7 +414,7 @@ def precompute(
         key_list.append('sum w_ls R_T')
     if 'zbf' in table_s.colnames:
         key_list.append('sum_pzbf')
-        zbins_pdf = np.arange(0,1.8,0.002)
+    zbins_pdf = np.arange(0,1.8,0.002)
     for key in key_list:
         if key=="sum_pzbf":
 
@@ -517,6 +519,11 @@ def precompute(
     table_l.meta['Ok0'] = cosmology.Ok0
     table_l.meta['Om0'] = cosmology.Om0
     table_l.meta['weighting'] = weighting
-    table_l.meta['thetas'] = theta_bins[:len(bins)]
+    if 'r_char' in table_l.colnames:
+        table_l.meta['thetas'] = np.ones(len(bins)) * np.nan
+        table_l.meta['theta_max'] = np.max(theta_bins)
+    else:
+        table_l.meta['thetas'] = theta_bins[:len(bins)]
+        table_l.meta['theta_max'] = np.max(theta_bins)
 
     return table_l, theta_bins, sigma_crit_eff

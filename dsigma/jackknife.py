@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import astropy.units as u
 from sklearn.cluster import DBSCAN, MiniBatchKMeans
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, SphericalVoronoi
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -21,7 +21,8 @@ from joblib import Parallel, delayed
 
 
 __all__ = ["compute_jackknife_fields", "compress_jackknife_fields",
-           "smooth_correlation_matrix", "jackknife_resampling"]
+           "smooth_correlation_matrix", "jackknife_resampling",
+           "jackknife_field_sizes"]
 
 
 def compute_jackknife_fields(table, centers, distance_threshold=1,
@@ -277,3 +278,17 @@ def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
 
     return ((len(np.unique(table_l['field_jk'])) - 1) *
             np.cov(np.array(samples), rowvar=False, ddof=0))
+
+
+def jackknife_field_sizes(centers):
+    """Characteristic angular size of each jackknife subregion.
+
+    The size is the diameter of a circle with the same area as the
+    subregion's exact spherical Voronoi cell.
+    """
+    centers_unit = centers / np.linalg.norm(centers, axis=1, keepdims=True)
+    sv = SphericalVoronoi(centers_unit)
+    sv.sort_vertices_of_regions()
+    areas_sr = sv.calculate_areas()
+
+    return np.degrees(2 * np.sqrt(areas_sr / np.pi))
