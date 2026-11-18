@@ -36,8 +36,6 @@ The following code installs a source checkout:
 
     git clone https://github.com/charliempetha/dsigma.git
     cd dsigma
-    python3 -m venv .venv
-    source .venv/bin/activate
     python -m pip install --upgrade pip setuptools wheel
     python -m pip install .
 
