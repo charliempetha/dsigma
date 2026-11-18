@@ -13,7 +13,8 @@ jax.config.update("jax_enable_x64", True)
 import jaxopt
 
 __all__ = ['number_of_pairs', 'raw_tangential_shear',
-           'raw_excess_surface_density', 'photo_z_dilution_factor',
+           'raw_cross_shear', 'raw_excess_surface_density',
+           'photo_z_dilution_factor',
            'boost_factor', 'scalar_shear_response_factor',
            'matrix_shear_response_factor', 'shear_responsivity_factor',
            'mean_lens_redshift', 'mean_source_redshift',
@@ -56,6 +57,14 @@ def raw_tangential_shear(table_l):
                    table_l['w_sys'].data[:, None], axis=0) /
             np.sum(table_l['sum w_ls'].data * table_l['w_sys'].data[:, None],
                    axis=0))
+
+
+def raw_cross_shear(table_l):
+    """Compute the average cross shear for a catalog."""
+    return (np.sum(table_l['sum w_ls e_x'].data *
+                   table_l['w_sys'].data[:, None], axis=0) /
+            np.sum(table_l['sum w_ls'].data *
+                   table_l['w_sys'].data[:, None], axis=0))
 
 
 def raw_excess_surface_density(table_l):
@@ -334,7 +343,8 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
                      matrix_shear_response_correction=False,
                      shear_responsivity_correction=False,
                      hsc_selection_bias_correction=False,
-                     random_subtraction=False, return_table=False):
+                     random_subtraction=False, cross=False,
+                     return_table=False):
     """Compute the mean tangential shear with corrections, if applicable.
 
     Parameters
@@ -388,6 +398,7 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
     result['rp'] = np.sqrt(result['rp_min'] * result['rp_max'])
     result['et_raw'] = raw_tangential_shear(table_l)
     result['et'] = raw_tangential_shear(table_l)
+    result['ex'] = raw_cross_shear(table_l)
     result['z_l'] = mean_lens_redshift(table_l)
     result['z_s'] = mean_source_redshift(table_l)
 
@@ -429,6 +440,8 @@ def tangential_shear(table_l, table_r=None, boost_correction=False,
         result['et'] -= result['et_r']
 
     if not return_table:
+        if cross:
+            return result['ex'].data
         return result['et'].data
 
     return result
