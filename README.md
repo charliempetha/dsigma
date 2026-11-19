@@ -21,6 +21,25 @@
 
 Documentation for `dsigma` with concept introductions, examples, and API documentation is available on [readthedocs](https://dsigma.readthedocs.io/).
 
+## Install from source
+
+The installable Python package is in the `dsigma/` directory. The similarly
+named source files at the repository root are not used by the package
+build.
+
+```bash
+git clone https://github.com/charliempetha/dsigma.git
+cd dsigma
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install .
+```
+
+For development so edits in `dsigma/` take effect immediately:
+
+```bash
+python -m pip install -e .
+```
+
 ## Attribution
 
 `dsigma` is listed in the [Astronomy Source Code Library](https://ascl.net/2204.006). If you find the code useful in your research, please cite [Lange & Huang (2022)](https://ui.adsabs.harvard.edu/abs/2022ascl.soft04006L/abstract).

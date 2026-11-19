@@ -9,6 +9,16 @@ from dsigma import precompute, stacking
 from fixtures import test_catalogs
 
 
+def test_cross_shear(test_catalogs):
+    table_l, table_s = test_catalogs
+    table_l, _, _ = precompute.precompute(
+        table_l, table_s, np.logspace(0, 1, 11) * u.Mpc)
+
+    assert np.allclose(
+        stacking.tangential_shear(table_l, cross=True),
+        stacking.raw_cross_shear(table_l))
+
+
 def test_treecorr(test_catalogs):
 
     try:

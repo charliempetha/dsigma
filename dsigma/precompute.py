@@ -369,6 +369,8 @@ def precompute(
 
     sigma_crit_eff = None
 
+    sigma_crit_eff = None
+
     if table_c is not None and table_n is None:
         z_min = np.amin(table_l["z"])
         z_max = np.amax(table_l["z"])
@@ -495,6 +497,7 @@ def precompute(
     if "zbf" in table_s.colnames:
         key_list.append("sum_pzbf")
     zbins_pdf = np.arange(0, 1.8, 0.002)
+
     for key in key_list:
         if key == "sum_pzbf":
             table_engine_r[key] = np.ascontiguousarray(

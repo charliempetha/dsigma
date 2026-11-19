@@ -77,6 +77,13 @@ def raw_cross_shear(table_l):
     ) / np.sum(table_l["sum w_ls"].data * table_l["w_sys"].data[:, None], axis=0)
 
 
+def raw_cross_shear(table_l):
+    """Compute the average cross shear for a catalog."""
+    return np.sum(
+        table_l["sum w_ls e_x"].data * table_l["w_sys"].data[:, None], axis=0
+    ) / np.sum(table_l["sum w_ls"].data * table_l["w_sys"].data[:, None], axis=0)
+
+
 def raw_excess_surface_density(table_l):
     """Compute the raw, uncorrected excess surface density for a catalog.
 
