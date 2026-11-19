@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 import astropy.units as u
 from sklearn.cluster import DBSCAN, MiniBatchKMeans
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, SphericalVoronoi
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -17,15 +17,18 @@ import os
 from joblib import Parallel, delayed
 
 
+__all__ = [
+    "compute_jackknife_fields",
+    "compress_jackknife_fields",
+    "smooth_correlation_matrix",
+    "jackknife_resampling",
+    "jackknife_field_sizes",
+]
 
 
-
-__all__ = ["compute_jackknife_fields", "compress_jackknife_fields",
-           "smooth_correlation_matrix", "jackknife_resampling"]
-
-
-def compute_jackknife_fields(table, centers, distance_threshold=1,
-                             weights=None, seed=None):
+def compute_jackknife_fields(
+    table, centers, distance_threshold=1, weights=None, seed=None
+):
     """Compute the centers for jackknife regions using DBSCAN and KMeans.
 
     The function first runs DBSCAN to identify continous fields of points.
@@ -61,14 +64,13 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
         The coordinates of the centers of the jackknife regions.
 
     """
-    x, y, z = spherical_to_cartesian(table['ra'].data, table['dec'].data)
+    x, y, z = spherical_to_cartesian(table["ra"].data, table["dec"].data)
     xyz = np.column_stack((x, y, z))
-    xyz = np.column_stack(spherical_to_cartesian(
-        table['ra'].data, table['dec'].data))
+    xyz = np.column_stack(spherical_to_cartesian(table["ra"].data, table["dec"].data))
 
     if isinstance(centers, np.ndarray):
         kdtree = cKDTree(centers)
-        table['field_jk'] = kdtree.query(xyz)[1]
+        table["field_jk"] = kdtree.query(xyz)[1]
         return centers
 
     if weights is None:
@@ -79,21 +81,22 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
     if not isinstance(distance_threshold, u.quantity.Quantity):
         distance_threshold *= u.deg
 
-    eps = np.sqrt(
-        2 - 2 * np.cos(distance_threshold.to(u.rad).value))
-    c = DBSCAN(eps=eps, algorithm='kd_tree').fit(xyz).labels_
+    eps = np.sqrt(2 - 2 * np.cos(distance_threshold.to(u.rad).value))
+    c = DBSCAN(eps=eps, algorithm="kd_tree").fit(xyz).labels_
 
     w_c = np.bincount(c[c != -1], weights=weights[c != -1])
     if n_jk < len(w_c):
         raise RuntimeError(
-            "The number of jackknife regions cannot be smaller than the " +
-            "number of continous fields. Try increasing `distance_threshold`" +
-            " or decreasing `centers`.")
+            "The number of jackknife regions cannot be smaller than the "
+            + "number of continous fields. Try increasing `distance_threshold`"
+            + " or decreasing `centers`."
+        )
 
     # Assign the number of jackknife fields according to the total number of
     # objects in each field.
-    n_jk_per_c = np.diff(np.rint(
-        np.cumsum(w_c) / np.sum(w_c) * n_jk).astype(int), prepend=0)
+    n_jk_per_c = np.diff(
+        np.rint(np.cumsum(w_c) / np.sum(w_c) * n_jk).astype(int), prepend=0
+    )
 
     # It can happen that one field is assigned 0 jackknife fields. In this
     # case, we will assign 1.
@@ -107,14 +110,26 @@ def compute_jackknife_fields(table, centers, distance_threshold=1,
     for i in range(len(w_c)):
         mask = i != c
         if w_c[i] > 0:
-            init = np.vstack([init, xyz[~mask][np.random.choice(
-                np.sum(~mask), n_jk_per_c[i], replace=False,
-                p=weights[~mask] / w_c[i])]])
+            init = np.vstack(
+                [
+                    init,
+                    xyz[~mask][
+                        np.random.choice(
+                            np.sum(~mask),
+                            n_jk_per_c[i],
+                            replace=False,
+                            p=weights[~mask] / w_c[i],
+                        )
+                    ],
+                ]
+            )
 
-    kmeans = MiniBatchKMeans(n_clusters=n_jk, init=init, n_init=1,
-                             random_state=int(rng.integers(2**31)))
+    kmeans = MiniBatchKMeans(
+        n_clusters=n_jk, init=init, n_init=1, random_state=int(rng.integers(2**31))
+    )
     centers = kmeans.fit(
-        xyz[weights > 0], sample_weight=weights[weights > 0]).cluster_centers_
+        xyz[weights > 0], sample_weight=weights[weights > 0]
+    ).cluster_centers_
     compute_jackknife_fields(table, centers)
 
     return centers
@@ -141,23 +156,23 @@ def compress_jackknife_fields(table):
         exactly as many rows as there are jackknife fields.
 
     """
-    all_field_jk = np.unique(table['field_jk'])
-    table_jk = Table(table[:len(all_field_jk)], copy=True)
+    all_field_jk = np.unique(table["field_jk"])
+    table_jk = Table(table[: len(all_field_jk)], copy=True)
 
     for i, field_jk in enumerate(all_field_jk):
-        mask = table['field_jk'] == field_jk
+        mask = table["field_jk"] == field_jk
         for key in table.colnames:
-            if key == 'field_jk':
+            if key == "field_jk":
                 table_jk[i][key] = table[key][mask][0]
-            elif key in ['w_sys', 'sum 1']:
+            elif key in ["w_sys", "sum 1"]:
                 table_jk[i][key] = np.sum(table[key][mask], axis=0)
             else:
                 with warnings.catch_warnings():
                     if np.any(np.isnan(table[key][mask])):
-                        warnings.simplefilter(
-                            'ignore', category=RuntimeWarning)
+                        warnings.simplefilter("ignore", category=RuntimeWarning)
                     table_jk[i][key] = np.average(
-                        table[key][mask], weights=table['w_sys'][mask], axis=0)
+                        table[key][mask], weights=table["w_sys"][mask], axis=0
+                    )
 
     return table_jk
 
@@ -187,14 +202,16 @@ def smooth_correlation_matrix(cor, sigma, exclude_diagonal=True):
 
     if exclude_diagonal:
         cor_new[0, 0] = 0.5 * (cor[0, 1] + cor[1, 0])
-        cor_new[n_dim - 1, n_dim - 1] = 0.5 * (cor[n_dim - 1, n_dim - 2] +
-                                               cor[n_dim - 2, n_dim - 1])
+        cor_new[n_dim - 1, n_dim - 1] = 0.5 * (
+            cor[n_dim - 1, n_dim - 2] + cor[n_dim - 2, n_dim - 1]
+        )
 
         for i in range(1, n_dim - 1):
-            cor_new[i, i] = 0.25 * (cor[i, i - 1] + cor[i, i + 1] +
-                                    cor[i - 1, i] + cor[i + 1, i])
+            cor_new[i, i] = 0.25 * (
+                cor[i, i - 1] + cor[i, i + 1] + cor[i - 1, i] + cor[i + 1, i]
+            )
 
-    cor_new = gaussian_filter(cor_new, sigma, mode='nearest')
+    cor_new = gaussian_filter(cor_new, sigma, mode="nearest")
 
     if exclude_diagonal:
         for i in range(n_dim):
@@ -202,33 +219,31 @@ def smooth_correlation_matrix(cor, sigma, exclude_diagonal=True):
 
     return cor_new
 
+
 class Register_func:
     def __init__(self, f, table_l, table_r, table_l_2, table_r_2, kwargs):
-        self.f= f
+        self.f = f
         self.table_l = table_l
         self.table_r = table_r
         self.table_l_2 = table_l_2
         self.table_r_2 = table_r_2
         self.kwargs = kwargs
+
     def __call__(self, field_jk):
         print("Working..", flush=True)
-        mask_l = self.table_l['field_jk'] != field_jk
-        for name, table in zip(['table_r', 'table_l_2', 'table_r_2'],
-                               [self.table_r, self.table_l_2, self.table_r_2]):
+        mask_l = self.table_l["field_jk"] != field_jk
+        for name, table in zip(
+            ["table_r", "table_l_2", "table_r_2"],
+            [self.table_r, self.table_l_2, self.table_r_2],
+        ):
             if table is not None:
-                self.kwargs[name] = table[table['field_jk'] != field_jk]
+                self.kwargs[name] = table[table["field_jk"] != field_jk]
         return self.f(self.table_l[mask_l], **self.kwargs)
 
 
-
-
-
-
-
-
-
-def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
-                         table_r_2=None, njobs=1,  **kwargs):
+def jackknife_resampling(
+    f, table_l, table_r=None, table_l_2=None, table_r_2=None, njobs=1, **kwargs
+):
     """Compute the covariance of a function from jackknife re-sampling.
 
     Parameters
@@ -262,18 +277,36 @@ def jackknife_resampling(f, table_l, table_r=None, table_l_2=None,
 
     """
 
-    multiprocessingfunction = Register_func(f, table_l, table_r, table_l_2, table_r_2, kwargs)
-    if njobs!=1:
-        #mp.set_start_method('spawn')
-        samples = Parallel(n_jobs=njobs)(delayed(multiprocessingfunction)(i) for i in np.unique(table_l['field_jk']))
-       # try:
-       #     samples = pool.gather(samples)
-       # except:
-       #     pass
+    multiprocessingfunction = Register_func(
+        f, table_l, table_r, table_l_2, table_r_2, kwargs
+    )
+    if njobs != 1:
+        # mp.set_start_method('spawn')
+        samples = Parallel(n_jobs=njobs)(
+            delayed(multiprocessingfunction)(i) for i in np.unique(table_l["field_jk"])
+        )
+    # try:
+    #     samples = pool.gather(samples)
+    # except:
+    #     pass
 
     else:
-        samples = list(map(multiprocessingfunction, np.unique(table_l['field_jk'])))
+        samples = list(map(multiprocessingfunction, np.unique(table_l["field_jk"])))
+
+    return (len(np.unique(table_l["field_jk"])) - 1) * np.cov(
+        np.array(samples), rowvar=False, ddof=0
+    )
 
 
-    return ((len(np.unique(table_l['field_jk'])) - 1) *
-            np.cov(np.array(samples), rowvar=False, ddof=0))
+def jackknife_field_sizes(centers):
+    """Characteristic angular size of each jackknife subregion.
+
+    The size is the diameter of a circle with the same area as the
+    subregion's exact spherical Voronoi cell.
+    """
+    centers_unit = centers / np.linalg.norm(centers, axis=1, keepdims=True)
+    sv = SphericalVoronoi(centers_unit)
+    sv.sort_vertices_of_regions()
+    areas_sr = sv.calculate_areas()
+
+    return np.degrees(2 * np.sqrt(areas_sr / np.pi))
